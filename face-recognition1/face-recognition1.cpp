@@ -8,15 +8,15 @@
 #include <iostream>
 #include <map>
 #include <stdio.h>
+#include <vector>
 
 using namespace std;
 
 namespace fs = filesystem;
 
 /** Function Headers */
-void detectAndDisplay(cv::Mat                                        frame,
-                      const cv::Ptr<cv::face::FisherFaceRecognizer>& model,
-                      int imgWidth, int imgHeight);
+void detectAndDisplay(cv::Mat                                      frame,
+                      const cv::Ptr<cv::face::LBPHFaceRecognizer>& model);
 
 /** Global variables */
 constexpr static char face_cascade_name[] =
@@ -24,11 +24,19 @@ constexpr static char face_cascade_name[] =
 constexpr static char csv_path[] = "../resources/csv.ext";
 
 static cv::CascadeClassifier  face_cascade;
-static cv::CascadeClassifier  eyes_cascade;
 static string                 window_name = "Capture - Face detection";
 static cv::RNG                rng(12345);
 static const map<int, string> predictionLabels = {{4, "Morgan Freeman"},
-                                                  {5, "std"}};
+                                                  {5, "Daniel Craig"},
+                                                  {6, "Keanu Reeves"},
+                                                  {7, "Kanye West"}};
+static const vector<string>   validatePictures = {
+    "../resources/training_faces/s4/6.jpg",
+    "../resources/validate_faces/s5/1.png",
+    "../resources/training_faces/s5/20.jpg",
+    "../resources/training_faces/s6/2.jpg",
+    "../resources/training_faces/s7/3.jpg",
+};
 
 static void read_csv(const string& fileName, vector<cv::Mat>& images,
                      vector<int>& labels, char separator = ';')
@@ -59,6 +67,24 @@ static void read_csv(const string& fileName, vector<cv::Mat>& images,
   }
 }
 
+static vector<cv::Mat> toGrayscale(const vector<cv::Mat>& images)
+{
+  vector<cv::Mat> result;
+  for (const auto image : images)
+  {
+    cv::Mat frameGray;
+    cv::resize(image, frameGray, cv::Size(250, 250),
+               cv::InterpolationFlags::INTER_CUBIC);
+
+    cvtColor(frameGray, frameGray, cv::COLOR_BGR2GRAY);
+    equalizeHist(frameGray, frameGray);
+
+    result.emplace_back(frameGray);
+  }
+
+  return result;
+}
+
 /** @function main */
 int main(int argc, const char** argv)
 {
@@ -69,42 +95,50 @@ int main(int argc, const char** argv)
     return -1;
   };
 
-  //-- 2. Train the Fisher model
+  //-- 2. Train the model
   vector<cv::Mat> images;
   vector<int>     labels;
   read_csv(csv_path, images, labels);
-
-  const auto imageWidth  = images[0].cols;
-  const auto imageHeight = images[0].rows;
-
-  auto model = cv::face::FisherFaceRecognizer::create();
-  model->train(images, labels);
+  const auto imagesGrayscale = toGrayscale(images);
+  auto       modelLbph       = cv::face::LBPHFaceRecognizer::create(1, 8, 8, 5);
+  modelLbph->train(imagesGrayscale, labels);
 
   while (true)
   {
-    auto frame = cv::imread("../resources/training_faces/s4/2.jpg");
-    //-- 3. Apply the classifier to the frame
-    if (frame.empty())
+    for (const auto path : validatePictures)
     {
-      printf(" --(!) No captured frame -- Break!");
-      break;
-    }
+      auto frame = cv::imread(path);
+      //-- 3. Apply the classifier to the frame
+      if (frame.empty())
+      {
+        printf(" --(!) No captured frame -- Break!");
+        break;
+      }
 
-    detectAndDisplay(frame, model, imageWidth, imageHeight);
-    int c = cv::waitKey(10);
-    if ((char)c == 'c')
-    {
-      break;
+      detectAndDisplay(frame, modelLbph);
+      int c = cv::waitKey(0);
+      if ((char)c == 'c')
+      {
+        break;
+      }
     }
   }
 
   return 0;
 }
 
+static string toString(double val)
+{
+  ostringstream out;
+  out.precision(2);
+  out << std::fixed << val;
+
+  return out.str();
+}
+
 /** @function detectAndDisplay */
-void detectAndDisplay(cv::Mat                                        frame,
-                      const cv::Ptr<cv::face::FisherFaceRecognizer>& model,
-                      int imgWidth, int imgHeight)
+void detectAndDisplay(cv::Mat                                      frame,
+                      const cv::Ptr<cv::face::LBPHFaceRecognizer>& model)
 {
   std::vector<cv::Rect> faces;
   cv::Mat               frame_gray;
@@ -115,22 +149,22 @@ void detectAndDisplay(cv::Mat                                        frame,
                                 cv::Size(30, 30));
   for (const auto face : faces)
   {
-    auto    faceGray = frame_gray(face);
-    cv::Mat faceResized;
-    cv::resize(faceGray, faceResized, cv::Size(imgWidth, imgHeight),
+    auto faceGray = frame_gray(face);
+    cv::resize(faceGray, faceGray, cv::Size(250, 250),
                cv::InterpolationFlags::INTER_CUBIC);
 
     int    predictLabel;
-    double confidence;
-    model->predict(faceResized, predictLabel, confidence);
+    double loss;
+    model->predict(faceGray, predictLabel, loss);
     cv::rectangle(frame, face, CV_RGB(0, 255, 0), 1);
 
-    auto message =
-        predictionLabels.at(predictLabel) + "/" + std::to_string(confidence);
+    const auto accuracy = loss > 100 ? 0 : 100 - loss;
+    const auto message =
+        predictionLabels.at(predictLabel) + "/" + toString(accuracy) + "%";
     cout << message << endl;
 
     cv::putText(frame, message, cv::Point(0, 20),
-                cv::HersheyFonts::FONT_HERSHEY_PLAIN, 1.0,
+                cv::HersheyFonts::FONT_HERSHEY_PLAIN, 0.85,
                 cv::Scalar(0, 255, 0), 2.0);
   }
   //-- Show what you got
